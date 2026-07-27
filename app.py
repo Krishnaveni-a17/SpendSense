@@ -3,6 +3,7 @@
 # Routes receive HTTP requests, call database functions,
 # and return JSON responses with appropriate status codes.
 
+from analyser import run_analysis
 from flask  import Flask, jsonify, request
 from database import init_db, insert_expense, fetch_all_expenses, \
                     fetch_expense_by_id, delete_expense
@@ -129,7 +130,23 @@ def remove_expense(expense_id):
         "message": f"Expense {expense_id} deleted successfully"
     }), 200
 
+@app.route("/expenses/analyse", methods=["GET"])
+def analyse_expenses():
 
+    expenses = fetch_all_expenses()
+
+    if len(expenses) == 0:
+        return jsonify({
+            "status" : "error",
+            "message": "No expenses found. Add some expenses first."
+        }), 404
+
+    analysis = run_analysis(expenses)
+
+    return jsonify({
+        "status"  : "success",
+        "analysis": analysis
+    }), 200
 if __name__ == "__main__":
     init_db()      # create table if it doesn't exist
     app.run(debug=True, port=5000)
