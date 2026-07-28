@@ -134,3 +134,60 @@ def build_bar(percentage, width=20):
     filled = int((percentage / 100) * width)
     empty  = width - filled
     return "█" * filled + "░" * empty
+
+
+def calculate_stats(expenses):
+
+    if not expenses:
+        return None
+
+    amounts   = [e["amount"]   for e in expenses]
+    dates     = [e["date"]     for e in expenses]
+    categories = [e["category"] for e in expenses]
+
+    # Total and count
+    total = round(sum(amounts), 2)
+    count = len(amounts)
+
+    # Highest and lowest single expense
+    highest = max(amounts)
+    lowest  = min(amounts)
+
+    # Average per expense
+    average = round(total / count, 2)
+
+    # Top category by total amount spent
+    grouped  = group_by_category(expenses)
+    top_cat  = max(grouped, key=lambda c: grouped[c])
+    top_amt  = round(grouped[top_cat], 2)
+
+    # Date range
+    earliest = min(dates)
+    latest   = max(dates)
+
+    # Daily average — only if date range spans more than one day
+    if earliest == latest:
+        daily_average = total
+    else:
+        from datetime import datetime
+        d1   = datetime.strptime(earliest, "%Y-%m-%d")
+        d2   = datetime.strptime(latest,   "%Y-%m-%d")
+        days = (d2 - d1).days + 1
+        daily_average = round(total / days, 2)
+
+    return {
+        "total_spent"   : total,
+        "expense_count" : count,
+        "highest_expense": highest,
+        "lowest_expense" : lowest,
+        "average_per_expense": average,
+        "daily_average"  : daily_average,
+        "top_category"   : {
+            "name"  : top_cat,
+            "amount": top_amt
+        },
+        "date_range": {
+            "from": earliest,
+            "to"  : latest
+        }
+    }
