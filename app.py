@@ -1,11 +1,11 @@
 # app.py
 # Main Flask application for SpendSense API.
-# HTTP layer only — receives requests, calls modules, returns JSON.
 
 
 from flask    import Flask, jsonify, request
 from database import (init_db, insert_expense, fetch_all_expenses,
-                      fetch_expense_by_id, delete_expense)
+                      fetch_expense_by_id, delete_expense,
+                      update_expense, fetch_expenses_by_category)
 from analyser import run_analysis, calculate_stats
 
 VALID_CATEGORIES = ["Food", "Transport", "Shopping",
@@ -15,8 +15,6 @@ app = Flask(__name__)
 
 
 # ── GLOBAL ERROR HANDLERS ─────────────────────────────────────────────────
-# These catch errors anywhere in the app — not just in one route.
-# Return consistent JSON instead of Flask's default HTML error pages.
 
 @app.errorhandler(404)
 def not_found(error):
@@ -56,14 +54,16 @@ def home():
     return jsonify({
         "status" : "running",
         "message": "SpendSense API is live",
-        "version": "4.0",
+        "version": "5.0",
         "endpoints": {
-            "health check"  : "GET    /",
-            "add expense"   : "POST   /expenses",
-            "view all"      : "GET    /expenses",
-            "delete expense": "DELETE /expenses/<id>",
-            "analyse"       : "GET    /expenses/analyse",
-            "statistics"    : "GET    /expenses/stats"
+            "health check"   : "GET    /",
+            "add expense"    : "POST   /expenses",
+            "view all"       : "GET    /expenses",
+            "filter category": "GET    /expenses?category=Food",
+            "update expense" : "PUT    /expenses/<id>",
+            "delete expense" : "DELETE /expenses/<id>",
+            "analyse"        : "GET    /expenses/analyse",
+            "statistics"     : "GET    /expenses/stats"
         }
     }), 200
 
@@ -71,6 +71,29 @@ def home():
 @app.route("/expenses", methods=["GET"])
 def get_expenses():
 
+    # request.args is a dict of query parameters from the URL
+    # .get() returns None if parameter not present — no crash
+    category = request.args.get("category", None)
+
+    if category:
+        # Normalize the category — same as POST validation
+        category = category.strip().capitalize()
+
+        if category not in VALID_CATEGORIES:
+            return jsonify({
+                "status" : "error",
+                "message": f"Invalid category. Choose from: {VALID_CATEGORIES}"
+            }), 400
+
+        expenses = fetch_expenses_by_category(category)
+        return jsonify({
+            "status"  : "success",
+            "filter"  : category,
+            "count"   : len(expenses),
+            "expenses": expenses
+        }), 200
+
+    # No filter — return everything
     expenses = fetch_all_expenses()
     return jsonify({
         "status"  : "success",
@@ -144,6 +167,85 @@ def add_expense():
     }), 201
 
 
+@app.route("/expenses/<int:expense_id>", methods=["PUT"])
+def edit_expense(expense_id):
+
+    # Confirm expense exists before attempting update
+    expense = fetch_expense_by_id(expense_id)
+    if expense is None:
+        return jsonify({
+            "status" : "error",
+            "message": f"Expense with ID {expense_id} not found"
+        }), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({
+            "status" : "error",
+            "message": "Request body is missing or not JSON"
+        }), 400
+
+    # Build dict of only the fields to update
+    # Validate each field that's present
+    updated_fields = {}
+
+    if "amount" in data:
+        try:
+            amount = float(data["amount"])
+            if amount <= 0:
+                raise ValueError
+            updated_fields["amount"] = amount
+        except (ValueError, TypeError):
+            return jsonify({
+                "status" : "error",
+                "message": "Amount must be a positive number"
+            }), 400
+
+    if "category" in data:
+        category = str(data["category"]).strip().capitalize()
+        if category not in VALID_CATEGORIES:
+            return jsonify({
+                "status" : "error",
+                "message": f"Invalid category. Choose from: {VALID_CATEGORIES}"
+            }), 400
+        updated_fields["category"] = category
+
+    if "note" in data:
+        note = str(data["note"]).strip()
+        if len(note) == 0:
+            return jsonify({
+                "status" : "error",
+                "message": "Note cannot be empty"
+            }), 400
+        updated_fields["note"] = note
+
+    if "date" in data:
+        date = str(data["date"])
+        if len(date) != 10 or date[4] != "-" or date[7] != "-":
+            return jsonify({
+                "status" : "error",
+                "message": "Date must be in YYYY-MM-DD format"
+            }), 400
+        updated_fields["date"] = date
+
+    if not updated_fields:
+        return jsonify({
+            "status" : "error",
+            "message": "No valid fields provided to update"
+        }), 400
+
+    update_expense(expense_id, updated_fields)
+
+    # Return the updated expense
+    updated = fetch_expense_by_id(expense_id)
+    return jsonify({
+        "status"         : "success",
+        "message"        : f"Expense {expense_id} updated successfully",
+        "updated_fields" : list(updated_fields.keys()),
+        "expense"        : updated
+    }), 200
+
+
 @app.route("/expenses/<int:expense_id>", methods=["DELETE"])
 def remove_expense(expense_id):
 
@@ -175,7 +277,6 @@ def analyse_expenses():
         }), 404
 
     analysis = run_analysis(expenses)
-
     return jsonify({
         "status"  : "success",
         "analysis": analysis
@@ -194,7 +295,6 @@ def expense_stats():
         }), 404
 
     stats = calculate_stats(expenses)
-
     return jsonify({
         "status": "success",
         "stats" : stats

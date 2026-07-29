@@ -101,3 +101,41 @@ def delete_expense(expense_id):
 
     connection.close()
     return deleted
+
+def update_expense(expense_id, fields):
+
+    if not fields:
+        return False
+
+    # Build SET clause dynamically from provided fields
+    # Example: {"amount": 500} → "amount = ?"
+    set_clause = ", ".join(f"{col} = ?" for col in fields.keys())
+    values     = list(fields.values()) + [expense_id]
+
+    connection = get_connection()
+    cursor     = connection.cursor()
+
+    cursor.execute(
+        f"UPDATE expenses SET {set_clause} WHERE id = ?",
+        values
+    )
+    connection.commit()
+
+    updated = cursor.rowcount > 0
+    connection.close()
+    return updated
+
+
+def fetch_expenses_by_category(category):
+
+    connection = get_connection()
+    cursor     = connection.cursor()
+
+    cursor.execute(
+        "SELECT * FROM expenses WHERE category = ? ORDER BY date DESC",
+        (category,)
+    )
+    rows = cursor.fetchall()
+    connection.close()
+
+    return [dict(row) for row in rows]
