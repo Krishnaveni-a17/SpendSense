@@ -1,12 +1,31 @@
 # app.py
 # Main Flask application for SpendSense API.
 
-
+import logging
+import os
 from flask    import Flask, jsonify, request
 from database import (init_db, insert_expense, fetch_all_expenses,
                       fetch_expense_by_id, delete_expense,
                       update_expense, fetch_expenses_by_category)
 from analyser import run_analysis, calculate_stats
+
+# ── LOGGING SETUP ─────────────────────────────────────────────────────────
+# Configure before anything else so all events are captured.
+# Writes to BOTH a file (app.log) AND the terminal simultaneously.
+
+os.makedirs("logs", exist_ok=True)
+
+logging.basicConfig(
+    level   = logging.INFO,
+    format  = "%(asctime)s | %(levelname)s | %(message)s",
+    datefmt = "%Y-%m-%d %H:%M:%S",
+    handlers = [
+        logging.FileHandler("logs/app.log"),   # writes to file
+        logging.StreamHandler()                 # also prints to terminal
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 VALID_CATEGORIES = ["Food", "Transport", "Shopping",
                     "Utilities", "Subscriptions"]
@@ -18,7 +37,7 @@ app = Flask(__name__)
 
 @app.errorhandler(404)
 def not_found(error):
-
+    logger.warning(f"404 Not Found: {request.method} {request.path}")
     return jsonify({
         "status" : "error",
         "message": "The requested resource was not found.",
@@ -28,7 +47,7 @@ def not_found(error):
 
 @app.errorhandler(405)
 def method_not_allowed(error):
-
+    logger.warning(f"405 Method Not Allowed: {request.method} {request.path}")
     return jsonify({
         "status" : "error",
         "message": "HTTP method not allowed for this endpoint.",
@@ -38,7 +57,7 @@ def method_not_allowed(error):
 
 @app.errorhandler(500)
 def server_error(error):
-
+    logger.error(f"500 Server Error: {request.method} {request.path} | {error}")
     return jsonify({
         "status" : "error",
         "message": "Something went wrong on our end. Please try again.",
@@ -50,11 +69,11 @@ def server_error(error):
 
 @app.route("/", methods=["GET"])
 def home():
-
+    logger.info("Health check requested")
     return jsonify({
         "status" : "running",
         "message": "SpendSense API is live",
-        "version": "5.0",
+        "version": "6.0",
         "endpoints": {
             "health check"   : "GET    /",
             "add expense"    : "POST   /expenses",
@@ -71,21 +90,19 @@ def home():
 @app.route("/expenses", methods=["GET"])
 def get_expenses():
 
-    # request.args is a dict of query parameters from the URL
-    # .get() returns None if parameter not present — no crash
     category = request.args.get("category", None)
 
     if category:
-        # Normalize the category — same as POST validation
         category = category.strip().capitalize()
-
         if category not in VALID_CATEGORIES:
+            logger.warning(f"GET /expenses — invalid category filter: {category}")
             return jsonify({
                 "status" : "error",
                 "message": f"Invalid category. Choose from: {VALID_CATEGORIES}"
             }), 400
 
         expenses = fetch_expenses_by_category(category)
+        logger.info(f"GET /expenses?category={category} — {len(expenses)} results")
         return jsonify({
             "status"  : "success",
             "filter"  : category,
@@ -93,8 +110,8 @@ def get_expenses():
             "expenses": expenses
         }), 200
 
-    # No filter — return everything
     expenses = fetch_all_expenses()
+    logger.info(f"GET /expenses — returned {len(expenses)} expenses")
     return jsonify({
         "status"  : "success",
         "count"   : len(expenses),
@@ -108,6 +125,7 @@ def add_expense():
     data = request.get_json()
 
     if not data:
+        logger.warning("POST /expenses — missing or invalid JSON body")
         return jsonify({
             "status" : "error",
             "message": "Request body is missing or not JSON"
@@ -116,6 +134,7 @@ def add_expense():
     required = ["amount", "category", "note", "date"]
     for field in required:
         if field not in data:
+            logger.warning(f"POST /expenses — missing field: {field}")
             return jsonify({
                 "status" : "error",
                 "message": f"Missing required field: '{field}'"
@@ -126,6 +145,7 @@ def add_expense():
         if amount <= 0:
             raise ValueError
     except (ValueError, TypeError):
+        logger.warning(f"POST /expenses — invalid amount: {data.get('amount')}")
         return jsonify({
             "status" : "error",
             "message": "Amount must be a positive number"
@@ -133,6 +153,7 @@ def add_expense():
 
     category = str(data["category"]).strip().capitalize()
     if category not in VALID_CATEGORIES:
+        logger.warning(f"POST /expenses — invalid category: {category}")
         return jsonify({
             "status" : "error",
             "message": f"Invalid category. Choose from: {VALID_CATEGORIES}"
@@ -140,6 +161,7 @@ def add_expense():
 
     date = str(data["date"])
     if len(date) != 10 or date[4] != "-" or date[7] != "-":
+        logger.warning(f"POST /expenses — invalid date format: {date}")
         return jsonify({
             "status" : "error",
             "message": "Date must be in YYYY-MM-DD format"
@@ -147,12 +169,15 @@ def add_expense():
 
     note = str(data["note"]).strip()
     if len(note) == 0:
+        logger.warning("POST /expenses — empty note")
         return jsonify({
             "status" : "error",
             "message": "Note cannot be empty"
         }), 400
 
     new_id = insert_expense(amount, category, note, date)
+    logger.info(f"POST /expenses — created expense ID {new_id}: "
+                f"₹{amount} {category} ({note})")
 
     return jsonify({
         "status" : "success",
@@ -170,9 +195,9 @@ def add_expense():
 @app.route("/expenses/<int:expense_id>", methods=["PUT"])
 def edit_expense(expense_id):
 
-    # Confirm expense exists before attempting update
     expense = fetch_expense_by_id(expense_id)
     if expense is None:
+        logger.warning(f"PUT /expenses/{expense_id} — not found")
         return jsonify({
             "status" : "error",
             "message": f"Expense with ID {expense_id} not found"
@@ -185,8 +210,6 @@ def edit_expense(expense_id):
             "message": "Request body is missing or not JSON"
         }), 400
 
-    # Build dict of only the fields to update
-    # Validate each field that's present
     updated_fields = {}
 
     if "amount" in data:
@@ -235,14 +258,15 @@ def edit_expense(expense_id):
         }), 400
 
     update_expense(expense_id, updated_fields)
+    logger.info(f"PUT /expenses/{expense_id} — updated fields: "
+                f"{list(updated_fields.keys())}")
 
-    # Return the updated expense
     updated = fetch_expense_by_id(expense_id)
     return jsonify({
-        "status"         : "success",
-        "message"        : f"Expense {expense_id} updated successfully",
-        "updated_fields" : list(updated_fields.keys()),
-        "expense"        : updated
+        "status"        : "success",
+        "message"       : f"Expense {expense_id} updated successfully",
+        "updated_fields": list(updated_fields.keys()),
+        "expense"       : updated
     }), 200
 
 
@@ -250,14 +274,15 @@ def edit_expense(expense_id):
 def remove_expense(expense_id):
 
     expense = fetch_expense_by_id(expense_id)
-
     if expense is None:
+        logger.warning(f"DELETE /expenses/{expense_id} — not found")
         return jsonify({
             "status" : "error",
             "message": f"Expense with ID {expense_id} not found"
         }), 404
 
     delete_expense(expense_id)
+    logger.info(f"DELETE /expenses/{expense_id} — deleted successfully")
 
     return jsonify({
         "status" : "success",
@@ -269,14 +294,16 @@ def remove_expense(expense_id):
 def analyse_expenses():
 
     expenses = fetch_all_expenses()
-
     if len(expenses) == 0:
+        logger.warning("GET /expenses/analyse — no expenses found")
         return jsonify({
             "status" : "error",
             "message": "No expenses found. Add some first."
         }), 404
 
     analysis = run_analysis(expenses)
+    logger.info(f"GET /expenses/analyse — personality: "
+                f"{analysis['personality']['type']}")
     return jsonify({
         "status"  : "success",
         "analysis": analysis
@@ -287,14 +314,16 @@ def analyse_expenses():
 def expense_stats():
 
     expenses = fetch_all_expenses()
-
     if len(expenses) == 0:
+        logger.warning("GET /expenses/stats — no expenses found")
         return jsonify({
             "status" : "error",
             "message": "No expenses found. Add some first."
         }), 404
 
     stats = calculate_stats(expenses)
+    logger.info(f"GET /expenses/stats — total: ₹{stats['total_spent']}, "
+                f"count: {stats['expense_count']}")
     return jsonify({
         "status": "success",
         "stats" : stats
@@ -302,5 +331,7 @@ def expense_stats():
 
 
 if __name__ == "__main__":
+    logger.info("SpendSense API starting up...")
     init_db()
+    logger.info("Database initialised. Server ready.")
     app.run(debug=True, port=5000)
