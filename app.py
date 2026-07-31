@@ -6,7 +6,8 @@ import os
 from flask    import Flask, jsonify, request
 from database import (init_db, insert_expense, fetch_all_expenses,
                       fetch_expense_by_id, delete_expense,
-                      update_expense, fetch_expenses_by_category)
+                      update_expense, fetch_expenses_by_category,
+                      search_expenses_by_note)
 from analyser import run_analysis, calculate_stats
 
 # ── LOGGING SETUP ─────────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ logging.basicConfig(
     format  = "%(asctime)s | %(levelname)s | %(message)s",
     datefmt = "%Y-%m-%d %H:%M:%S",
     handlers = [
-        logging.FileHandler("logs/app.log"),   # writes to file
+        logging.FileHandler("logs/app.log", encoding="utf-8"),   # writes to file
         logging.StreamHandler()                 # also prints to terminal
     ]
 )
@@ -86,26 +87,36 @@ def home():
         }
     }), 200
 
-
 @app.route("/expenses", methods=["GET"])
 def get_expenses():
 
     category = request.args.get("category", None)
+    note     = request.args.get("note", None)
 
     if category:
         category = category.strip().capitalize()
         if category not in VALID_CATEGORIES:
-            logger.warning(f"GET /expenses — invalid category filter: {category}")
+            logger.warning(f"GET /expenses — invalid category: {category}")
             return jsonify({
                 "status" : "error",
                 "message": f"Invalid category. Choose from: {VALID_CATEGORIES}"
             }), 400
-
         expenses = fetch_expenses_by_category(category)
         logger.info(f"GET /expenses?category={category} — {len(expenses)} results")
         return jsonify({
             "status"  : "success",
-            "filter"  : category,
+            "filter"  : f"category={category}",
+            "count"   : len(expenses),
+            "expenses": expenses
+        }), 200
+
+    if note:
+        keyword  = note.strip()
+        expenses = search_expenses_by_note(keyword)
+        logger.info(f"GET /expenses?note={keyword} — {len(expenses)} results")
+        return jsonify({
+            "status"  : "success",
+            "filter"  : f"note contains '{keyword}'",
             "count"   : len(expenses),
             "expenses": expenses
         }), 200
@@ -117,7 +128,6 @@ def get_expenses():
         "count"   : len(expenses),
         "expenses": expenses
     }), 200
-
 
 @app.route("/expenses", methods=["POST"])
 def add_expense():

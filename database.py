@@ -139,3 +139,16 @@ def fetch_expenses_by_category(category):
     connection.close()
 
     return [dict(row) for row in rows]
+
+def search_expenses_by_note(keyword):
+
+    connection = get_connection()
+    cursor     = connection.cursor()
+
+    cursor.execute(
+        "SELECT * FROM expenses WHERE LOWER(note) LIKE ? ORDER BY date DESC",
+        (f"%{keyword.lower()}%",)
+    )
+    rows = cursor.fetchall()
+    connection.close()
+    return [dict(row) for row in rows]
