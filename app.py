@@ -345,3 +345,6 @@ if __name__ == "__main__":
     init_db()
     logger.info("Database initialised. Server ready.")
     app.run(debug=True, port=5000)
+else:
+
+    init_db()
